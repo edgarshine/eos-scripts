@@ -1,0 +1,106 @@
+#!/usr/bin/env python
+#
+# Generate gratuitous arp messages for network testing
+#
+# Copyright (c) 2013 Arista Networks, Inc.  All rights reserved. 
+#
+# 12/2013 - 0.1 Initial release
+#               darrin@aristanetworks.com
+
+__version__=0.3
+
+DEFAULT_MAC='06:00:00:00:00:01'
+DEFAULT_IP_MAC_RATIO=1
+
+USAGE_EXAMPLES="""
+Examples:
+    Send 100 garps, 100 IP addresses for 1 mac (default mac)
+        arpgen -a 100 eth0 10.0.0.1 1
+
+    Send 100 garps, 5 IP addresses per mac for 20 macs (uses 10.0.0.1-4)
+        arpgen -a 5 eth0 10.0.0.1 20
+
+    Send 100 garps, 1 IP per mac for 100 macs, starting from 01:23:45:67:89:ab
+        arpgen -m 01:23:45:67:89:ab eth0 10.0.0.1 100
+
+WARNING: This application does not check if IPs are in use. Sending a gratuitous
+         ARP for an existing host will interrupt that host's connectivity.
+
+Send bug reports to darrin@aristanetworks.com
+"""
+
+import struct, socket, logging
+
+# suppress extraneous scapy warnings
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+
+try:
+    from scapy.all import *
+except ImportError:
+    print "Scapy library not found.\n"\
+            "See http://www.secdev.org/projects/scapy/doc/installation.html\n"\
+            "for installation instructions. Exiting..."
+    exit(-1)
+
+def garp_frame(ip_address, src_mac):
+    bmac = 'ff:ff:ff:ff:ff:ff'
+    arp = ARP(psrc=ip_address, hwsrc=src_mac, pdst=ip_address, hwdst=bmac)
+    return Ether(dst=bmac)/arp
+
+def next_mac(mac):
+    m = int(mac.replace(':',''), 16)
+    m = m + 1
+    return ':'.join('%02x' % ord(b) for b in ('%012x' % m).decode('hex'))
+
+def next_ip(ip):
+    addr = struct.unpack('!I',socket.inet_aton(ip))[0]
+    addr = addr + 1
+    return socket.inet_ntoa(struct.pack('!I',addr))
+
+def arpgen(intf, start_mac, ip_address, ip_mac_ratio, num_macs):
+    print "Starting mac:\t{0}\nStarting IP:\t{1}".format(start_mac, ip_address)
+    count = 0
+    mac = start_mac
+    for i in xrange(num_macs):
+        for j in xrange(ip_mac_ratio):
+            sendp(garp_frame(ip_address, mac), iface=intf, verbose=0)
+            count = count + 1
+            ip_address = next_ip(ip_address)
+        mac = next_mac(mac)
+    print "Sent {0} frames".format(count)
+
+import argparse, os
+def main():
+    if not os.geteuid() == 0:
+        print "Must run as root"
+        exit(-1)
+
+    parser = argparse.ArgumentParser(description='gratuitous arp generator', 
+        epilog=USAGE_EXAMPLES, formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument('--version', action='version', 
+        version='%(prog)s {0}'.format(__version__))
+    parser.add_argument('-a', metavar='ip_mac_ratio', type=int, 
+        default=DEFAULT_IP_MAC_RATIO, 
+        help='ip addresses per mac (default={0})'.format(DEFAULT_IP_MAC_RATIO)) 
+    parser.add_argument('-m', metavar='mac_address',
+        default=DEFAULT_MAC, 
+        help='starting mac address (default={0})'.format(DEFAULT_MAC))
+    parser.add_argument('interface', 
+        help='network interface, e.g. eth0')
+    parser.add_argument('ip_address', 
+        help='starting ip address (increments automatically)')
+    parser.add_argument('num_macs', type=int, 
+        help='total number of mac addresses to use')
+    args = parser.parse_args()
+
+    arpgen( intf=args.interface,
+            start_mac=args.m,
+            ip_address=args.ip_address,
+            ip_mac_ratio=args.a,
+            num_macs=args.num_macs )
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
